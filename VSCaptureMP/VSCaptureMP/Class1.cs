@@ -1,6 +1,6 @@
 ﻿/*
- * This file is part of VitalSignsCaptureMP v1.001.
- * Copyright (C) 2017 John George K., xeonfusion@users.sourceforge.net
+ * This file is part of VitalSignsCaptureMP v1.007.
+ * Copyright (C) 2017-19 John George K., xeonfusion@users.sourceforge.net
 
     VitalSignsCaptureMP is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -25,6 +25,8 @@ using System.Net;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Globalization;
+using System.Runtime.Serialization.Json;
+
 
 namespace VSCaptureMP
 {
@@ -35,12 +37,26 @@ namespace VSCaptureMP
         public List<string> m_NumValHeaders = new List<string>();
         public StringBuilder m_strbuildvalues = new StringBuilder();
         public StringBuilder m_strbuildheaders = new StringBuilder();
+		public List<WaveValResult> m_WaveValResultList = new List<WaveValResult>();
+		public StringBuilder m_strbuildwavevalues = new StringBuilder();
         public bool m_transmissionstart = true;
         public string m_strTimestamp;
         public ushort m_actiontype;
         public int m_elementcount = 0;
         public int m_headerelementcount = 0;
-        public int m_csvexportset = 1; 
+        public int m_csvexportset = 1;
+        public List<SaSpec> m_SaSpecList = new List<SaSpec>();
+        public List<SaCalibData16> m_SaCalibDataSpecList = new List<SaCalibData16>();
+        public bool m_calibratewavevalues = false;
+
+        public ushort m_obpollhandle = 0;
+        public uint m_idlabelhandle = 0;
+        public DateTime m_baseDateTime = new DateTime();
+        public uint m_baseRelativeTime = 0;
+        public string m_DeviceID;
+        public string m_jsonposturl;
+        public int m_dataexportset = 1;
+
 
         public class NumericValResult
         {
@@ -48,6 +64,19 @@ namespace VSCaptureMP
             public string Relativetimestamp;
             public string PhysioID;
             public string Value;
+            public string DeviceID;
+        }
+
+		public class WaveValResult
+		{
+			public string Timestamp;
+			public string Relativetimestamp;
+			public string PhysioID;
+			public byte[] Value;
+            public string DeviceID;
+            public ushort obpoll_handle;
+            public SaSpec saSpecData = new SaSpec();
+            public SaCalibData16 saCalibData = new SaCalibData16();
         }
 
 
@@ -89,6 +118,13 @@ namespace VSCaptureMP
             MPClient.Send(DataConstants.aarq_msg_ext_poll2, DataConstants.aarq_msg_ext_poll2.Length);
         }
 
+		public void SendWaveAssociationRequest()
+		{
+			//MPClient.Send(DataConstants.aarq_msg_ext_poll2, DataConstants.aarq_msg_ext_poll2.Length);
+			MPClient.Send(DataConstants.aarq_msg_wave_ext_poll2, DataConstants.aarq_msg_wave_ext_poll2.Length);
+		}
+
+
         public void SendMDSCreateEventResult()
         {
             MPClient.Send(DataConstants.mds_create_resp_msg, DataConstants.mds_create_resp_msg.Length);
@@ -106,9 +142,173 @@ namespace VSCaptureMP
             
         }
 
+		public void SendExtendedPollWaveDataRequest()
+		{
+			MPClient.Send(DataConstants.ext_poll_request_wave_msg, DataConstants.ext_poll_request_wave_msg.Length);
+			//MPClient.Send(DataConstants.ext_poll_request_msg3, DataConstants.ext_poll_request_msg3.Length)
+		}
+
+        public void GetRTSAPriorityListRequest()
+        {
+            MPClient.Send(DataConstants.get_rtsa_prio_msg, DataConstants.get_rtsa_prio_msg.Length);
+        }
+
+        public void SetRTSAPriorityListRequest()
+        {
+            MPClient.Send(DataConstants.set_rtsa_prio_msg, DataConstants.set_rtsa_prio_msg.Length);
+        }
+
+        public void SetRTSAPriorityList(int nWaveSetType)
+        {
+            List<byte> WaveTrType = new List<byte>();
+            CreateWaveformSet(nWaveSetType, WaveTrType);
+            SendRTSAPriorityMessage(WaveTrType.ToArray());
+        }
+
+        public static void CreateWaveformSet(int nWaveSetType, List<byte> WaveTrtype)
+        {
+            //Upto 3 ECG and/or 8 non-ECG waveforms can be polled by selecting the appropriate labels
+            //in the Wave object priority list
+
+            switch (nWaveSetType)
+            {
+                case 0:
+                    break;
+                case 1:
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianshortus(0x03))); //count
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianshortus(0x0C))); //length
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_ECG_ELEC_POTL_II")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_ECG_ELEC_POTL_I")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_ECG_ELEC_POTL_III")))));
+                    break;
+                case 2:
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianshortus(0x06))); //count
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianshortus(0x18))); //length
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_ECG_ELEC_POTL_II")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_PRESS_BLD_ART_ABP")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_PRESS_BLD_ART")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_PULS_OXIM_PLETH")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_PRESS_BLD_VEN_CENT")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_RESP")))));
+                    break;
+                case 3:
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianshortus(0x03))); //count
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianshortus(0x0C))); //length
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_ECG_ELEC_POTL_AVR")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_ECG_ELEC_POTL_AVL")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_ECG_ELEC_POTL_AVF")))));
+                    break;
+                case 4:
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianshortus(0x03))); //count
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianshortus(0x0C))); //length
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_ECG_ELEC_POTL_V1")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_ECG_ELEC_POTL_V2")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_ECG_ELEC_POTL_V3")))));
+                    break;
+                case 5:
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianshortus(0x03))); //count
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianshortus(0x0C))); //length
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_ECG_ELEC_POTL_V4")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_ECG_ELEC_POTL_V5")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_ECG_ELEC_POTL_V6")))));
+                    break;
+                case 6:
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianshortus(0x04))); //count
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianshortus(0x10))); //length
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_EEG_NAMES_EEG_CHAN1_LBL")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_EEG_NAMES_EEG_CHAN2_LBL")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_EEG_NAMES_EEG_CHAN3_LBL")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_EEG_NAMES_EEG_CHAN4_LBL")))));
+                    break;
+                case 7:
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianshortus(0x02))); //count
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianshortus(0x08))); //length
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_PRESS_BLD_ART_ABP")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_PRESS_BLD_ART")))));
+                    break;
+                case 8:
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianshortus(0x06))); //count
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianshortus(0x18))); //length
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_ECG_ELEC_POTL")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_PULS_OXIM_PLETH")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_PRESS_BLD_ART_ABP")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_PRESS_BLD_ART")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_PRESS_BLD_VEN_CENT")))));
+                    WaveTrtype.AddRange(BitConverter.GetBytes(correctendianuint((uint)(Enum.Parse(typeof(DataConstants.WavesIDLabels), "NLS_NOM_AWAY_CO2")))));
+                    break;
+            }
+        }
+
+        public void SendRTSAPriorityMessage(byte[] WaveTrType)
+        {
+            List<byte> tempbufflist = new List<byte>();
+
+            //Assemble request in reverse order first to calculate lengths
+            //Insert TextIdList
+            tempbufflist.InsertRange(0, WaveTrType);
+
+            Ava avatype = new Ava();
+            avatype.attribute_id = (ushort)IntelliVue.AttributeIDs.NOM_ATTR_POLL_RTSA_PRIO_LIST;
+            avatype.length = (ushort)WaveTrType.Length;
+            //avatype.length = (ushort)tempbufflist.Count;
+            tempbufflist.InsertRange(0, BitConverter.GetBytes(correctendianshortus(avatype.length)));
+            tempbufflist.InsertRange(0, BitConverter.GetBytes(correctendianshortus(avatype.attribute_id)));
+
+            byte[] AttributeModEntry = { 0x00, 0x00 };
+            tempbufflist.InsertRange(0, AttributeModEntry);
+
+            byte[] ModListlength = BitConverter.GetBytes(correctendianshortus((ushort)tempbufflist.Count));
+            byte[] ModListCount = { 0x00, 0x01 };
+            tempbufflist.InsertRange(0, ModListlength);
+            tempbufflist.InsertRange(0, ModListCount);
+
+            byte[] ManagedObjectID = { 0x00, 0x21, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+            tempbufflist.InsertRange(0, ManagedObjectID);
+
+            ROIVapdu rovi = new ROIVapdu();
+            rovi.length = (ushort)tempbufflist.Count;
+            rovi.command_type = (ushort)IntelliVue.Commands.CMD_CONFIRMED_SET;
+            rovi.inovke_id = 0x0000;
+            tempbufflist.InsertRange(0, BitConverter.GetBytes(correctendianshortus(rovi.length)));
+            tempbufflist.InsertRange(0, BitConverter.GetBytes(correctendianshortus(rovi.command_type)));
+            tempbufflist.InsertRange(0, BitConverter.GetBytes(correctendianshortus(rovi.inovke_id)));
+
+            ROapdus roap = new ROapdus();
+            roap.length = (ushort)tempbufflist.Count;
+            roap.ro_type = (ushort)IntelliVue.RemoteOperationHeader.ROIV_APDU;
+            tempbufflist.InsertRange(0, BitConverter.GetBytes(correctendianshortus(roap.length)));
+            tempbufflist.InsertRange(0, BitConverter.GetBytes(correctendianshortus(roap.ro_type)));
+
+            byte[] Spdu = { 0xE1, 0x00, 0x00, 0x02 };
+            tempbufflist.InsertRange(0, Spdu);
+
+            byte[] finaltxbuff = tempbufflist.ToArray();
+
+            MPClient.Send(finaltxbuff, finaltxbuff.Length);
+        }
+
+        public async Task SendCycledExtendedPollWaveDataRequest(int nInterval)
+        {
+            int nmillisecond = nInterval;
+
+            if (nmillisecond != 0)
+            {
+                do
+                {
+                    MPClient.Send(DataConstants.ext_poll_request_wave_msg, DataConstants.ext_poll_request_wave_msg.Length);
+                    await Task.Delay(nmillisecond);
+
+                }
+                while (true);
+            }
+            else MPClient.Send(DataConstants.ext_poll_request_wave_msg, DataConstants.ext_poll_request_wave_msg.Length);
+        }
+
+
         public async Task SendCycledExtendedPollDataRequest(int nInterval)
         {
-            int nmillisecond = nInterval * 1000;
+            int nmillisecond = nInterval;
+
             if (nmillisecond != 0)
             { 
                 do
@@ -124,9 +324,8 @@ namespace VSCaptureMP
 
         public async Task KeepConnectionAlive(int nInterval)
         {
-            //int nmillisecond = (nInterval/2) * 1000;
             int nmillisecond = 6 * 1000;
-            if (nmillisecond != 0 && nInterval !=1)
+            if (nmillisecond != 0 && nInterval>1000)
             {
                 do
                 {
@@ -180,9 +379,11 @@ namespace VSCaptureMP
                 {
                     //Get Date and Time
                     case DataConstants.NOM_ATTR_TIME_ABS:
+                        GetAbsoluteTimeFromBCDFormat(avaattribobjects);
                         break;
                     //Get Relative Time attribute
                     case DataConstants.NOM_ATTR_TIME_REL:
+                        GetBaselineRelativeTimestamp(avaattribobjects);
                         break;
                     //Get Patient demographics
                     case DataConstants.NOM_ATTR_PT_ID:
@@ -197,6 +398,45 @@ namespace VSCaptureMP
             }
 
 
+        }
+
+        private static int BinaryCodedDecimalToInteger(int value)
+        {
+            if (value != 0xFF)
+            {
+                int lowerNibble = value & 0x0F;
+                int upperNibble = value >> 4;
+
+                int multipleOfOne = lowerNibble;
+                int multipleOfTen = upperNibble * 10;
+
+                return (multipleOfOne + multipleOfTen);
+            }
+            else return 0;
+        }
+
+        public void GetAbsoluteTimeFromBCDFormat(byte[] bcdtimebuffer)
+        {
+            int century = BinaryCodedDecimalToInteger(bcdtimebuffer[0]);
+            int year = BinaryCodedDecimalToInteger(bcdtimebuffer[1]);
+            int month = BinaryCodedDecimalToInteger(bcdtimebuffer[2]);
+            int day = BinaryCodedDecimalToInteger(bcdtimebuffer[3]);
+            int hour = BinaryCodedDecimalToInteger(bcdtimebuffer[4]);
+            int minute = BinaryCodedDecimalToInteger(bcdtimebuffer[5]);
+            int second = BinaryCodedDecimalToInteger(bcdtimebuffer[6]);
+            int fraction = BinaryCodedDecimalToInteger(bcdtimebuffer[7]);
+
+            int formattedyear = (century * 100) + year;
+
+            DateTime dateTime = new DateTime(formattedyear, month, day, hour, minute, second, fraction);
+
+            m_baseDateTime = dateTime;
+
+        }
+
+        public void GetBaselineRelativeTimestamp(byte[] timebuffer)
+        {
+            m_baseRelativeTime = correctendianuint(BitConverter.ToUInt32(timebuffer, 0));
         }
 
         public void ReadData(byte[] readbuffer)
@@ -291,8 +531,12 @@ namespace VSCaptureMP
             Array.Copy(packetbuffer, header.Length, packetdata, 0, packetdata.Length);
 
             m_strTimestamp = GetPacketTimestamp(header);
-            DateTime dtDateTime = DateTime.Now;
-            string strDateTime = dtDateTime.ToString("dd-mm-yyyy HH:mm:ss.fff", CultureInfo.InvariantCulture);
+            uint currentRelativeTime = UInt32.Parse(m_strTimestamp);
+            //DateTime dtDateTime = DateTime.Now;
+            double ElapsedTimeMilliseonds = (currentRelativeTime - m_baseRelativeTime) * 125 / 1000;
+            DateTime dtDateTime = m_baseDateTime.AddMilliseconds(ElapsedTimeMilliseonds);
+
+            string strDateTime = dtDateTime.ToString("dd-MM-yyyy HH:mm:ss.fff", CultureInfo.InvariantCulture);
             Console.WriteLine("Time:{0}", strDateTime);
             Console.WriteLine("Time:{0}", m_strTimestamp);
 
@@ -342,7 +586,9 @@ namespace VSCaptureMP
                     }
                 }
 
+                if (m_dataexportset == 2) ExportNumValListToJSON("Numeric");
                 ExportDataToCSV();
+				ExportWaveToCSV();
             }
             
         }
@@ -366,8 +612,10 @@ namespace VSCaptureMP
         {
             scpoll.context_id = correctendianshortus(binreader2.ReadUInt16());
             scpoll.count = correctendianshortus(binreader2.ReadUInt16());
-            if(scpoll.count>0) scpoll.length = correctendianshortus(binreader2.ReadUInt16());
-
+            //There can be empty singlecontextpollobjects
+            //if(scpoll.count>0) scpoll.length = correctendianshortus(binreader2.ReadUInt16());
+            scpoll.length = correctendianshortus(binreader2.ReadUInt16());
+            
             int obpollobjectscount = Convert.ToInt32(scpoll.count);
             if(scpoll.length>0) scpoll.obpollobjectsarray = binreader2.ReadBytes(scpoll.length);
 
@@ -377,6 +625,8 @@ namespace VSCaptureMP
         public int DecodeObservationPollObjects(ref ObservationPoll obpollobject, ref BinaryReader binreader3)
         {
             obpollobject.obj_handle = correctendianshortus(binreader3.ReadUInt16());
+
+            m_obpollhandle = obpollobject.obj_handle;
 
             AttributeList attributeliststruct = new AttributeList();
 
@@ -401,7 +651,11 @@ namespace VSCaptureMP
 
                 switch (avaobject.attribute_id)
                 {
+                    case DataConstants.NOM_ATTR_ID_HANDLE:
+                        //ReadIDHandle(avaattribobjects);
+                        break;
                     case DataConstants.NOM_ATTR_ID_LABEL:
+                        ReadIDLabel(avaattribobjects);
                         break;
                     case DataConstants.NOM_ATTR_NU_VAL_OBS:
                         ReadNumericObservationValue(avaattribobjects);
@@ -413,6 +667,21 @@ namespace VSCaptureMP
                         break;
                     case DataConstants.NOM_ATTR_ID_LABEL_STRING:
                         ReadIDLabelString(avaattribobjects);
+                        break;
+					case DataConstants.NOM_ATTR_SA_VAL_OBS:
+						ReadWaveSaObservationValueObject(avaattribobjects);
+						break;
+					case DataConstants.NOM_ATTR_SA_CMPD_VAL_OBS:
+						ReadCompoundWaveSaObservationValue(avaattribobjects);
+						break;
+                    case DataConstants.NOM_ATTR_SA_SPECN:
+                        ReadSaSpecifications(avaattribobjects);
+                        break;
+                    case DataConstants.NOM_ATTR_SCALE_SPECN_I16:
+                        //ReadSaScaleSpecifications(avaattribobjects);
+                        break;
+                    case DataConstants.NOM_ATTR_SA_CALIB_I16:
+                        ReadSaCalibrationSpecifications(avaattribobjects);
                         break;
                     default:
                         // unknown attribute -> do nothing
@@ -481,6 +750,24 @@ namespace VSCaptureMP
 
         }
 
+        public void ReadIDHandle(byte[] avaattribobjects)
+        {
+            MemoryStream memstream5 = new MemoryStream(avaattribobjects);
+            BinaryReader binreader5 = new BinaryReader(memstream5);
+
+            ushort IDhandle = correctendianshortus(binreader5.ReadUInt16());
+        }
+
+        public void ReadIDLabel(byte[] avaattribobjects)
+        {
+            MemoryStream memstream5 = new MemoryStream(avaattribobjects);
+            BinaryReader binreader5 = new BinaryReader(memstream5);
+
+            uint IDlabel = correctendianuint(binreader5.ReadUInt32());
+
+            m_idlabelhandle = IDlabel;
+        }
+
         public void ReadIDLabelString(byte[] avaattribobjects)
         {
 
@@ -495,7 +782,6 @@ namespace VSCaptureMP
 
             string label = Encoding.UTF8.GetString(stringval);
             Console.WriteLine("Label String: {0}", label);
-
         }
 
         public void ReadNumericObservationValue(byte[] avaattribobjects)
@@ -526,10 +812,21 @@ namespace VSCaptureMP
 
             NumericValResult NumVal = new NumericValResult();
             NumVal.Relativetimestamp = m_strTimestamp;
-            NumVal.Timestamp = DateTime.Now.ToString();
+
+            //DateTime dtDateTime = DateTime.Now;
+            uint currentRelativeTime = UInt32.Parse(m_strTimestamp);
+            double ElapsedTimeMilliseonds = (currentRelativeTime - m_baseRelativeTime) * 125 / 1000;
+            DateTime dtDateTime = m_baseDateTime.AddMilliseconds(ElapsedTimeMilliseonds);
+            //NumVal.Timestamp = dtDateTime.ToString();
+
+            //string strDateTime = dtDateTime.ToString("dd-MM-yyyy HH:mm:ss.fff", CultureInfo.InvariantCulture);
+            string strDateTime = dtDateTime.ToString("G", DateTimeFormatInfo.InvariantInfo);
+            NumVal.Timestamp = strDateTime;
+            //NumVal.Timestamp = DateTime.Now.ToString();
+
             NumVal.PhysioID = physio_id;
             NumVal.Value = valuestr;
-
+            NumVal.DeviceID = m_DeviceID;
 
             m_NumericValList.Add(NumVal);
             m_NumValHeaders.Add(NumVal.PhysioID);
@@ -564,13 +861,242 @@ namespace VSCaptureMP
 
         }
 
+		public void ReadWaveSaObservationValueObject(byte[] avaattribobjects)
+		{
+			MemoryStream memstream7 = new MemoryStream(avaattribobjects);
+			BinaryReader binreader7 = new BinaryReader(memstream7);
+
+			ReadWaveSaObservationValue(ref binreader7);
+
+		}
+
+        public void ReadSaSpecifications(byte[] avaattribobjects)
+        {
+            MemoryStream memstream7 = new MemoryStream(avaattribobjects);
+            BinaryReader binreader7 = new BinaryReader(memstream7);
+
+            SaSpec Saspecobj = new SaSpec();
+            Saspecobj.array_size = correctendianshortus(binreader7.ReadUInt16());
+            Saspecobj.sample_size = binreader7.ReadByte();
+            Saspecobj.significant_bits = binreader7.ReadByte();
+            Saspecobj.SaFlags = correctendianshortus(binreader7.ReadUInt16());
+
+            Saspecobj.obpoll_handle = m_obpollhandle;
+            
+            //Add to a list of Sample array specification definitions if it's not already present
+
+            int salistindex = m_SaSpecList.FindIndex(x => x.obpoll_handle == Saspecobj.obpoll_handle);
+            if (salistindex == -1)
+            {
+                m_SaSpecList.Add(Saspecobj);
+            }
+            else
+            {
+                m_SaSpecList.RemoveAt(salistindex);
+                m_SaSpecList.Add(Saspecobj);
+            }
+        }
+
+        public void ReadWaveSaObservationValue(ref BinaryReader binreader7)
+		{ 
+			SaObsValue WaveSaObjectValue = new SaObsValue();
+			WaveSaObjectValue.physio_id = correctendianshortus(binreader7.ReadUInt16());
+            WaveSaObjectValue.state = correctendianshortus(binreader7.ReadUInt16());
+            WaveSaObjectValue.length = correctendianshortus(binreader7.ReadUInt16());
+
+			int wavevalobjectslength = Convert.ToInt32(WaveSaObjectValue.length);
+			byte[] WaveValObjects = binreader7.ReadBytes(wavevalobjectslength);
+
+			string physio_id = Enum.GetName(typeof(IntelliVue.AlertSource), WaveSaObjectValue.physio_id);
+
+			WaveValResult WaveVal = new WaveValResult();
+			WaveVal.Relativetimestamp = m_strTimestamp;
+
+            //DateTime dtDateTime = DateTime.Now;
+            uint currentRelativeTime = UInt32.Parse(m_strTimestamp);
+            double ElapsedTimeMilliseonds = (currentRelativeTime - m_baseRelativeTime) * 125 / 1000;
+            DateTime dtDateTime = m_baseDateTime.AddMilliseconds(ElapsedTimeMilliseonds);
+
+            string strDateTime = dtDateTime.ToString("dd-MM-yyyy HH:mm:ss.fff", CultureInfo.InvariantCulture);
+            //WaveVal.Timestamp = DateTime.Now.ToString();
+
+            WaveVal.Timestamp = strDateTime;
+            WaveVal.PhysioID = physio_id;
+            WaveVal.DeviceID = m_DeviceID;
+
+            WaveVal.obpoll_handle = m_obpollhandle;
+            ushort physio_id_handle = WaveSaObjectValue.physio_id;
+
+            WaveVal.saCalibData = m_SaCalibDataSpecList.Find(x => x.physio_id == physio_id_handle);
+            if (WaveVal.saCalibData == null)
+            {
+                WaveVal.saCalibData = new SaCalibData16();
+                if (physio_id_handle == 0x107)
+                {
+                    //use default values for ecg II
+                    WaveVal.saCalibData.lower_absolute_value = 0;
+                    WaveVal.saCalibData.upper_absolute_value = 1;
+                    WaveVal.saCalibData.lower_scaled_value = 0x1fe7;
+                    WaveVal.saCalibData.upper_scaled_value = 0x20af;
+                }
+                else if (physio_id_handle == 0x102)
+                {
+                    //use default values for ecg V5
+                    WaveVal.saCalibData.lower_absolute_value = 0;
+                    WaveVal.saCalibData.upper_absolute_value = 1;
+                    WaveVal.saCalibData.lower_scaled_value = 0x1fd4;
+                    WaveVal.saCalibData.upper_scaled_value = 0x209c;
+                }
+                else if (physio_id_handle == 0x4A10)
+                {
+                    //use default values for art ibp
+                    WaveVal.saCalibData.lower_absolute_value = 0;
+                    WaveVal.saCalibData.upper_absolute_value = 150;
+                    WaveVal.saCalibData.lower_scaled_value = 0x0320;
+                    WaveVal.saCalibData.upper_scaled_value = 0x0c80;
+                }
+                else if (physio_id_handle == 0x5000)
+                {
+                    //use default values for resp
+                    WaveVal.saCalibData.lower_absolute_value = 0;
+                    WaveVal.saCalibData.upper_absolute_value = 1;
+                    WaveVal.saCalibData.lower_scaled_value = 0x04ce;
+                    WaveVal.saCalibData.upper_scaled_value = 0x0b33;
+                }
+                else WaveVal.saCalibData = null;
+            }
+
+            WaveVal.Value = new byte[wavevalobjectslength];
+            Array.Copy(WaveValObjects, WaveVal.Value, wavevalobjectslength);
+
+            //Find the Sample array specification definition that matches the observation sample array size
+
+            WaveVal.saSpecData = m_SaSpecList.Find(x => x.obpoll_handle == WaveVal.obpoll_handle);
+            if (WaveVal.saSpecData == null)
+            {
+                WaveVal.saSpecData = new SaSpec();
+                if (wavevalobjectslength % 128 == 0)
+                {
+                    //use default values for ecg
+                    WaveVal.saSpecData.significant_bits = 0x0E;
+                    WaveVal.saSpecData.SaFlags = 0x3000;
+                    WaveVal.saSpecData.sample_size = 0x10;
+                    WaveVal.saSpecData.array_size = 0x80;
+                }
+                else if (wavevalobjectslength % 64 == 0)
+                {
+                    //use default values for art ibp
+                    WaveVal.saSpecData.significant_bits = 0x0E;
+                    WaveVal.saSpecData.SaFlags = 0x3000;
+                    WaveVal.saSpecData.sample_size = 0x10;
+                    WaveVal.saSpecData.array_size = 0x40;
+
+                }
+                else if (wavevalobjectslength % 32 == 0)
+                {
+                    //use default values for resp
+                    WaveVal.saSpecData.significant_bits = 0x0C;
+                    WaveVal.saSpecData.SaFlags = 0x8000;
+                    WaveVal.saSpecData.sample_size = 0x10;
+                    WaveVal.saSpecData.array_size = 0x20;
+                }
+                else if (wavevalobjectslength % 16 == 0)
+                {
+                    //use default values for pleth
+                    WaveVal.saSpecData.significant_bits = 0x0C;
+                    WaveVal.saSpecData.SaFlags = 0x8000;
+                    WaveVal.saSpecData.sample_size = 0x10;
+                    WaveVal.saSpecData.array_size = 0x10;
+                }
+
+            }
+
+            m_WaveValResultList.Add(WaveVal);
+	
+		}
+
+		public void ReadCompoundWaveSaObservationValue(byte[] avaattribobjects)
+		{
+			MemoryStream memstream8 = new MemoryStream(avaattribobjects);
+			BinaryReader binreader8 = new BinaryReader(memstream8);
+
+			SaObsValueCmp WaveSaObjectValueCmp = new SaObsValueCmp();
+			WaveSaObjectValueCmp.count = correctendianshortus(binreader8.ReadUInt16());
+            WaveSaObjectValueCmp.length = correctendianshortus(binreader8.ReadUInt16());
+
+            int cmpwaveobjectscount = Convert.ToInt32(WaveSaObjectValueCmp.count);
+			int cmpwaveobjectslength = Convert.ToInt32(WaveSaObjectValueCmp.length);
+
+			byte[] cmpwavearrayobject = binreader8.ReadBytes(cmpwaveobjectslength);
+
+            if(cmpwaveobjectscount>0)
+            {
+				MemoryStream memstream9 = new MemoryStream(cmpwavearrayobject);
+				BinaryReader binreader9 = new BinaryReader(memstream9);
+
+				for (int k = 0; k<cmpwaveobjectscount; k++)
+                {
+					ReadWaveSaObservationValue(ref binreader9);
+                }
+            }
+		}
+
+        public void ReadSaScaleSpecifications(byte[] avaattribobjects)
+        {
+            MemoryStream memstream9 = new MemoryStream(avaattribobjects);
+            BinaryReader binreader9 = new BinaryReader(memstream9);
+
+            ScaleRangeSpec16 ScaleSpec = new ScaleRangeSpec16();
+
+            ScaleSpec.lower_absolute_value = FloattypeToValue(correctendianuint(binreader9.ReadUInt32()));
+            ScaleSpec.upper_absolute_value = FloattypeToValue(correctendianuint(binreader9.ReadUInt32()));
+            ScaleSpec.lower_scaled_value = correctendianshortus(binreader9.ReadUInt16());
+            ScaleSpec.upper_scaled_value = correctendianshortus(binreader9.ReadUInt16());
+
+            ScaleSpec.obpoll_handle = m_obpollhandle;
+            ScaleSpec.physio_id = Get16bitLSBfromUInt(m_idlabelhandle);
+        }
+
+        public void ReadSaCalibrationSpecifications(byte[] avaattribobjects)
+        {
+            MemoryStream memstream10 = new MemoryStream(avaattribobjects);
+            BinaryReader binreader10 = new BinaryReader(memstream10);
+
+            SaCalibData16 SaCalibData = new SaCalibData16();
+
+            SaCalibData.lower_absolute_value = FloattypeToValue(correctendianuint(binreader10.ReadUInt32()));
+            SaCalibData.upper_absolute_value = FloattypeToValue(correctendianuint(binreader10.ReadUInt32()));
+            SaCalibData.lower_scaled_value = correctendianshortus(binreader10.ReadUInt16());
+            SaCalibData.upper_scaled_value = correctendianshortus(binreader10.ReadUInt16());
+            SaCalibData.increment = correctendianshortus(binreader10.ReadUInt16());
+            SaCalibData.cal_type = correctendianshortus(binreader10.ReadUInt16());
+
+            SaCalibData.obpoll_handle = m_obpollhandle;
+
+            //Get 16 bit physiological id from 32 bit wave id label
+            SaCalibData.physio_id = Get16bitLSBfromUInt(m_idlabelhandle);
+
+            //Add to a list of Sample array calibration specification definitions if it's not already present
+            int salistindex = m_SaCalibDataSpecList.FindIndex(x => x.physio_id == SaCalibData.physio_id);
+
+            if (salistindex == -1)
+            {
+                m_SaCalibDataSpecList.Add(SaCalibData);
+            }
+            else
+            {
+                m_SaCalibDataSpecList.RemoveAt(salistindex);
+                m_SaCalibDataSpecList.Add(SaCalibData);
+            }
+        }
+
         public static double FloattypeToValue(uint fvalue)
         {
             double value = 0;
             if (fvalue != DataConstants.FLOATTYPE_NAN)
             {
-                uint exponentbits = (fvalue >> 24);
-                uint mantissabits = (fvalue << 8);
+                int exponentbits = (int)(fvalue >> 24);
+                int mantissabits = (int)(fvalue << 8);
                 mantissabits = (mantissabits >> 8);
 
                 sbyte signedexponentbits = (sbyte)exponentbits; // Get Two's complement signed byte
@@ -583,7 +1109,14 @@ namespace VSCaptureMP
             }
             else return (double)fvalue;
         }
-        
+
+        public static ushort Get16bitLSBfromUInt(uint sourcevalue)
+        {
+            uint lsb = (sourcevalue & 0xFFFF);
+
+            return (ushort)lsb;
+        }
+
         public static int correctendianshort(ushort sValue)
         {
             byte [] bArray = BitConverter.GetBytes(sValue);
@@ -608,6 +1141,15 @@ namespace VSCaptureMP
             if (BitConverter.IsLittleEndian) Array.Reverse(bArray);
 
             uint result = BitConverter.ToUInt32(bArray, 0);
+            return result;
+        }
+
+        public static short correctendianshorts(short sValue)
+        {
+            byte[] bArray = BitConverter.GetBytes(sValue);
+            if (BitConverter.IsLittleEndian) Array.Reverse(bArray);
+
+            short result = BitConverter.ToInt16(bArray, 0);
             return result;
         }
 
@@ -638,6 +1180,7 @@ namespace VSCaptureMP
                 m_strbuildheaders.Append("Time");
                 m_strbuildheaders.Append(',');
                 m_strbuildheaders.Append("RelativeTime");
+
                 m_strbuildheaders.Append(',');
 
 
@@ -724,12 +1267,12 @@ namespace VSCaptureMP
                 WriteNumericHeadersListConsolidatedCSV();
                 string pathcsv = Path.Combine(Directory.GetCurrentDirectory(), "MPDataExport.csv");
 
-                int firstelementreltimestamp = Convert.ToInt32(m_NumericValList.ElementAt(0).Relativetimestamp);
+                uint firstelementreltimestamp = Convert.ToUInt32(m_NumericValList.ElementAt(0).Relativetimestamp);
                 int listcount = m_NumericValList.Count;
 
                 for (int i = m_elementcount; i < listcount; i++)
                 {
-                    int elementreltime = Convert.ToInt32(m_NumericValList.ElementAt(i).Relativetimestamp);
+                    uint elementreltime = Convert.ToUInt32(m_NumericValList.ElementAt(i).Relativetimestamp);
                     if (elementreltime == firstelementreltimestamp)
                     {
                         m_strbuildvalues.Append(m_NumericValList.ElementAt(i).Value);
@@ -767,12 +1310,12 @@ namespace VSCaptureMP
             {
                 string pathcsv = Path.Combine(Directory.GetCurrentDirectory(), "MPDataExport.csv");
 
-                int firstelementreltimestamp = Convert.ToInt32(m_NumericValList.ElementAt(0).Relativetimestamp);
+                uint firstelementreltimestamp = Convert.ToUInt32(m_NumericValList.ElementAt(0).Relativetimestamp);
                 int listcount = m_NumValHeaders.Count;
 
                 for(int i= m_headerelementcount;i<listcount;i++)
                 {
-                    int elementreltime = Convert.ToInt32(m_NumericValList.ElementAt(i).Relativetimestamp);
+                    uint elementreltime = Convert.ToUInt32(m_NumericValList.ElementAt(i).Relativetimestamp);
                     if (elementreltime == firstelementreltimestamp)
                     {
                         m_strbuildheaders.Append(m_NumValHeaders.ElementAt(i));
@@ -805,18 +1348,135 @@ namespace VSCaptureMP
             }
         }
 
+		public void ExportWaveToCSV()
+		{
+			int wavevallistcount = m_WaveValResultList.Count;
+
+			if (wavevallistcount != 0)
+			{
+				
+				foreach (WaveValResult WavValResult in m_WaveValResultList)
+				{
+					string WavValID = string.Format("{0}WaveExport.csv",WavValResult.PhysioID);
+
+					string pathcsv = Path.Combine(Directory.GetCurrentDirectory(), WavValID);
+
+					int wavvalarraylength = WavValResult.Value.GetLength(0);
+
+                    for (int index = 0; index < wavvalarraylength; index++)
+                    {
+                        //Data sample size is 16 bits, but the significant bits represent actual sample value
+
+                        //Read every 2 bytes
+                        byte msb = WavValResult.Value.ElementAt(index);
+                        byte lsb = WavValResult.Value.ElementAt(index + 1);
+
+                        int msbval;
+                        //mask depends on no. of significant bits
+                        //int mask = 0x3FFF; //mask for 14 bits
+                        int mask = CreateMask(WavValResult.saSpecData.significant_bits);
+
+                        //int shift = (m_sample_size-8);
+                        int msbshift = (msb << 8);
+
+                        if (WavValResult.saSpecData.SaFlags < 0x4000)
+                        {
+                            msbval = (msbshift & mask);
+                            msbval = (msbval >> 8);
+                        }
+                        else msbval = msb;
+                        msb = Convert.ToByte(msbval);
+
+                        byte[] data = { msb, lsb };
+                        if (BitConverter.IsLittleEndian) Array.Reverse(data);
+
+                        double Waveval = BitConverter.ToInt16(data, 0);
+
+                        if (WavValResult.saSpecData.SaFlags != 0x2000 && m_calibratewavevalues == true)
+                        {
+                            Waveval = CalibrateSaValue(Waveval, WavValResult.saCalibData);
+                        }
+
+                        index = index + 1;
+
+                        {
+                            m_strbuildwavevalues.Append(WavValResult.Timestamp);
+                            m_strbuildwavevalues.Append(',');
+                            m_strbuildwavevalues.Append(WavValResult.Relativetimestamp);
+                            m_strbuildwavevalues.Append(',');
+                            m_strbuildwavevalues.Append(Waveval.ToString());
+                            m_strbuildwavevalues.Append(',');
+                            m_strbuildwavevalues.AppendLine();
+                        }
+					}
+
+					ExportNumValListToCSVFile(pathcsv, m_strbuildwavevalues);
+
+					m_strbuildwavevalues.Clear();
+				}
+
+				m_WaveValResultList.RemoveRange(0, wavevallistcount);
+			}
+		}
+
+        public static int CreateMask(int significantbits)
+        {
+            int mask = 0;
+
+            for (int i = 0; i < significantbits; i++)
+            {
+                mask |= (1 << i);
+            }
+            return mask;
+        }
+
+        public double CalibrateSaValue(double Waveval, SaCalibData16 sacalibdata)
+        {
+            if (!double.IsNaN(Waveval))
+            {
+                if (sacalibdata != null)
+                {
+                    double prop = 0;
+                    double value = 0;
+                    double Wavevalue = Waveval;
+
+                    //Check if value is out of range
+                    if (Waveval > sacalibdata.upper_scaled_value) Waveval = sacalibdata.upper_scaled_value;
+                    if (Waveval < sacalibdata.lower_scaled_value) Waveval = sacalibdata.lower_scaled_value;
+
+                    //Get proportion from scaled values
+                    if (sacalibdata.upper_scaled_value != sacalibdata.lower_scaled_value)
+                    {
+                        prop = (Waveval - sacalibdata.lower_scaled_value) / (sacalibdata.upper_scaled_value - sacalibdata.lower_scaled_value);
+                    }
+                    if (sacalibdata.upper_absolute_value != sacalibdata.lower_absolute_value)
+                    {
+                        value = sacalibdata.lower_absolute_value + (prop * (sacalibdata.upper_absolute_value - sacalibdata.lower_absolute_value));
+                        value = Math.Round(value, 2);
+                    }
+
+                    Wavevalue = value;
+                    return Wavevalue;
+                }
+                else return Waveval;
+
+            }
+            else return Waveval;
+        }
+
         public void ExportNumValListToCSVFile(string _FileName, StringBuilder strbuildNumVal)
         {
             try
             {
                 // Open file for reading. 
-                StreamWriter wrStream = new StreamWriter(_FileName, true, Encoding.UTF8);
+                using (StreamWriter wrStream = new StreamWriter(_FileName, true, Encoding.UTF8))
+                {
+                    wrStream.Write(strbuildNumVal);
+                    strbuildNumVal.Clear();
 
-                wrStream.Write(strbuildNumVal);
-                strbuildNumVal.Clear();
-
-                // close file stream. 
-                wrStream.Close();
+                    // close file stream. 
+                    wrStream.Close();
+                }
 
             }
 
@@ -832,25 +1492,16 @@ namespace VSCaptureMP
         {
             try
             {
-                /*// Open file for reading. 
-                FileStream _FileStream = new FileStream(_FileName, FileMode.Append, FileAccess.Write);
-
-                // Writes a block of bytes to this stream using data from a byte array
-                _FileStream.Write(_ByteArray, 0, nWriteLength);
-                
-                // close file stream. 
-                _FileStream.Close();*/
-
                 // Open file for reading. 
-                StreamWriter wrStream = new StreamWriter(_FileName, true, Encoding.UTF8);
+                using (StreamWriter wrStream = new StreamWriter(_FileName, true, Encoding.UTF8))
+                {
+                    String datastr = BitConverter.ToString(_ByteArray);
 
-                String datastr = BitConverter.ToString(_ByteArray);
+                    wrStream.WriteLine(datastr);
 
-                wrStream.WriteLine(datastr);
-                
-                // close file stream. 
-                wrStream.Close();
-
+                    // close file stream. 
+                    wrStream.Close();
+                }
 
                 return true;
             }
@@ -864,7 +1515,72 @@ namespace VSCaptureMP
             return false;
         }
 
-        
+        public void ExportNumValListToJSON(string datatype)
+        {
+            //string filename = String.Format("MP{0}DataExport.json", datatype);
+
+            //string pathjson = Path.Combine(Directory.GetCurrentDirectory(), filename);
+
+            DataContractJsonSerializer jsonSerializer = new DataContractJsonSerializer(typeof(List<NumericValResult>));
+
+            MemoryStream memstream = new MemoryStream();
+            jsonSerializer.WriteObject(memstream, m_NumericValList);
+
+            string serializedJSON = Encoding.UTF8.GetString(memstream.ToArray());
+            memstream.Close();
+
+            try
+            {
+                // Open file for reading. 
+                //using (StreamWriter wrStream = new StreamWriter(pathjson, true, Encoding.UTF8))
+                //{
+                //  wrStream.Write(serializedJSON);
+                //  wrStream.Close();
+                //}
+
+                PostJSONDataToServer(serializedJSON);
+
+            }
+
+            catch (Exception _Exception)
+            {
+                // Error. 
+                Console.WriteLine("Exception caught in process: {0}", _Exception.ToString());
+            }
+        }
+
+        public void PostJSONDataToServer(string postData)
+        {
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(m_jsonposturl);
+            request.Method = "POST";
+
+            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Ssl3 | SecurityProtocolType.Tls | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls12;
+
+            byte[] byteArray = Encoding.UTF8.GetBytes(postData);
+            request.ContentType = "application/json";
+            request.ContentLength = byteArray.Length;
+
+            using (Stream dataStream = request.GetRequestStream())
+            {
+                dataStream.Write(byteArray, 0, byteArray.Length);
+                dataStream.Close();
+            }
+
+            // Get the response.  
+            HttpWebResponse response = (HttpWebResponse)request.GetResponse();
+            Console.WriteLine(response.StatusDescription);
+
+            using (Stream dataStream = response.GetResponseStream())
+            {
+                StreamReader reader = new StreamReader(dataStream);
+                string responseFromServer = reader.ReadToEnd();
+                Console.WriteLine(responseFromServer);
+                reader.Close();
+                dataStream.Close();
+            }
+
+            response.Close();
+        }
     }
 
 
